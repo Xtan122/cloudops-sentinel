@@ -1,0 +1,43 @@
+{
+    "version": "1.0",
+    "dry_run_mode": true,
+    "guardrails": {
+        "cost": {
+            "enabled": true,
+            "required_tags": [
+                "Owner", 
+                "Project"],
+            "violation_severity": "medium",
+            "remediation_delay_minutes": 60
+        },
+
+        "security": {
+            "enabled": true,
+            "violation_severity": "critical",
+            "remediation_delay_seconds": 10
+        },
+
+        "iam": {
+            "enabled": true,
+            "violation_severity": "high",
+            "remediation_delay_seconds": 30
+        },
+
+        "compliance": {
+            "enabled": true,
+            "violation_severity": "high"
+        }
+    },
+        
+    "slack": {
+        "webhook_url_env": "SLACK_WEBHOOK_URL",
+        "channel": "#cloud-alerts",
+        "timezone": "Asia/Ho_Chi_Minh"
+    },
+
+    "logging": {
+        "level": "INFO",
+        "cloudwatch_retention_days": 90
+    }
+
+}
