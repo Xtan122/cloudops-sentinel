@@ -167,3 +167,183 @@ def test_revert_s3_bucket_to_private_client_error_raises(remediation_s3_module):
             
         mock_client.assert_called_once_with("s3", region_name="us-east-1")
         mock_s3.delete_bucket_policy.assert_called_once_with(Bucket="test-bucket")
+
+
+@pytest.fixture
+def remediation_iam_module():
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "lambda"
+        / "remediation_engine"
+        / "remediation_iam.py"
+    )
+    spec = importlib.util.spec_from_file_location("remediation_iam", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_deactivate_access_key_dry_run_does_not_call_aws(remediation_iam_module, caplog):
+    caplog.set_level(logging.INFO)
+    with patch("boto3.client") as mock_client:
+        result = remediation_iam_module.deactivate_access_key(
+            username="testuser",
+            access_key_id="AKIA1234567890",
+            dry_run=True,
+        )
+        assert result["executed"] is False
+        assert result["status"] == "skipped"
+        assert result["reason"] == "dry_run_mode"
+        assert result["action"] == "deactivate_iam_access_key"
+        assert result["resource_type"] == "iam_access_key"
+        assert result["resource_id"] == "AKIA1234567890"
+        assert result["username"] == "testuser"
+        assert result["dry_run"] is True
+        
+        assert "[DRY-RUN]" in caplog.text
+        mock_client.assert_not_called()
+
+
+def test_deactivate_access_key_success_calls_update_access_key(remediation_iam_module):
+    with patch("boto3.client") as mock_client:
+        mock_iam = mock_client.return_value
+        result = remediation_iam_module.deactivate_access_key(
+            username="testuser",
+            access_key_id="AKIA1234567890",
+            dry_run=False,
+        )
+        
+        mock_client.assert_called_once_with("iam")
+        mock_iam.update_access_key.assert_called_once_with(
+            UserName="testuser",
+            AccessKeyId="AKIA1234567890",
+            Status="Inactive"
+        )
+        
+        assert result["executed"] is True
+        assert result["status"] == "access_key_deactivated"
+        assert result["action"] == "deactivate_iam_access_key"
+        assert result["resource_type"] == "iam_access_key"
+        assert result["resource_id"] == "AKIA1234567890"
+        assert result["username"] == "testuser"
+        assert result["dry_run"] is False
+
+
+def test_deactivate_access_key_raises_client_error(remediation_iam_module):
+    error = botocore.exceptions.ClientError(
+        error_response={
+            "Error": {
+                "Code": "NoSuchEntity",
+                "Message": "The user with name testuser cannot be found.",
+            }
+        },
+        operation_name="UpdateAccessKey",
+    )
+
+    with patch("boto3.client") as mock_client:
+        mock_iam = mock_client.return_value
+        mock_iam.update_access_key.side_effect = error
+        
+        with pytest.raises(botocore.exceptions.ClientError):
+            remediation_iam_module.deactivate_access_key(
+                username="testuser",
+                access_key_id="AKIA1234567890",
+                dry_run=False,
+            )
+            
+        mock_client.assert_called_once_with("iam")
+        mock_iam.update_access_key.assert_called_once_with(
+            UserName="testuser",
+            AccessKeyId="AKIA1234567890",
+            Status="Inactive"
+        )
+
+
+@pytest.fixture
+def remediation_ebs_module():
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "lambda"
+        / "remediation_engine"
+        / "remediation_ebs.py"
+    )
+    spec = importlib.util.spec_from_file_location("remediation_ebs", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_tag_non_compliant_ebs_dry_run_does_not_call_aws(remediation_ebs_module, caplog):
+    caplog.set_level(logging.INFO)
+    with patch("boto3.client") as mock_client:
+        result = remediation_ebs_module.tag_non_compliant_ebs(
+            volume_id="vol-1234567890abcdef0",
+            region="ap-southeast-1",
+            dry_run=True,
+        )
+        assert result["executed"] is False
+        assert result["status"] == "skipped"
+        assert result["reason"] == "dry_run_mode"
+        assert result["action"] == "tag_ebs_non_compliant"
+        assert result["resource_type"] == "ebs"
+        assert result["resource_id"] == "vol-1234567890abcdef0"
+        assert result["region"] == "ap-southeast-1"
+        assert result["dry_run"] is True
+        
+        assert "[DRY-RUN]" in caplog.text
+        mock_client.assert_not_called()
+
+
+def test_tag_non_compliant_ebs_success_calls_create_tags(remediation_ebs_module):
+    with patch("boto3.client") as mock_client:
+        mock_ec2 = mock_client.return_value
+        result = remediation_ebs_module.tag_non_compliant_ebs(
+            volume_id="vol-1234567890abcdef0",
+            region="ap-southeast-1",
+            dry_run=False,
+        )
+        
+        mock_client.assert_called_once_with("ec2", region_name="ap-southeast-1")
+        mock_ec2.create_tags.assert_called_once_with(
+            Resources=["vol-1234567890abcdef0"],
+            Tags=[{"Key": "Compliance-Status", "Value": "Non-Compliant"}],
+        )
+        
+        assert result["executed"] is True
+        assert result["status"] == "ebs_tagged_non_compliant"
+        assert result["action"] == "tag_ebs_non_compliant"
+        assert result["resource_type"] == "ebs"
+        assert result["resource_id"] == "vol-1234567890abcdef0"
+        assert result["region"] == "ap-southeast-1"
+        assert result["dry_run"] is False
+
+
+def test_tag_non_compliant_ebs_raises_client_error(remediation_ebs_module):
+    error = botocore.exceptions.ClientError(
+        error_response={
+            "Error": {
+                "Code": "InvalidVolume.NotFound",
+                "Message": "The volume 'vol-1234567890abcdef0' does not exist.",
+            }
+        },
+        operation_name="CreateTags",
+    )
+
+    with patch("boto3.client") as mock_client:
+        mock_ec2 = mock_client.return_value
+        mock_ec2.create_tags.side_effect = error
+        
+        with pytest.raises(botocore.exceptions.ClientError):
+            remediation_ebs_module.tag_non_compliant_ebs(
+                volume_id="vol-1234567890abcdef0",
+                region="ap-southeast-1",
+                dry_run=False,
+            )
+            
+        mock_client.assert_called_once_with("ec2", region_name="ap-southeast-1")
+        mock_ec2.create_tags.assert_called_once_with(
+            Resources=["vol-1234567890abcdef0"],
+            Tags=[{"Key": "Compliance-Status", "Value": "Non-Compliant"}],
+        )
