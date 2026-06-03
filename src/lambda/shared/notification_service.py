@@ -43,7 +43,6 @@ def send_violation_alert(violation: dict, ai_report: str, dry_run: bool) -> bool
         ),
     }
 
-    # TODO 1: Nếu violation có timestamp phù hợp Slack ts, gắn vào đây
     if "timestamp" in violation:
         ts_val = violation["timestamp"]
         try:
@@ -63,7 +62,20 @@ def send_violation_alert(violation: dict, ai_report: str, dry_run: bool) -> bool
         "attachments": [attachment]
     }
 
-    # TODO 2: Gọi _send_with_retry(payload) và return kết quả bool
+    return _send_with_retry(payload)
+
+
+def send_slack_payload(payload: dict) -> bool:
+    """
+    Gửi payload Slack tùy ý (Block Kit hoặc attachments) qua webhook.
+
+    Public transport dùng chung — cho phép các module khác (human_approval, v.v.)
+    gửi payload mà không cần coupling vào private _send_with_retry.
+
+    Bám requirements:
+    - REQ-11.3: Block Kit cho approval requests
+    - REQ-11.4: retry exponential backoff qua _send_with_retry
+    """
     return _send_with_retry(payload)
 
 
@@ -77,7 +89,6 @@ def _send_with_retry(payload: dict, max_retries: int = 3) -> bool:
     """
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
 
-    # TODO 3: Nếu thiếu webhook_url:
     if not webhook_url:
         logger.error("Missing SLACK_WEBHOOK_URL environment variable")
         return False
@@ -86,7 +97,6 @@ def _send_with_retry(payload: dict, max_retries: int = 3) -> bool:
 
     for attempt in range(max_retries):
         try:
-            # TODO 4: Gửi POST request:
             response = http.request(
                 "POST",
                 webhook_url,
@@ -95,11 +105,9 @@ def _send_with_retry(payload: dict, max_retries: int = 3) -> bool:
                 timeout=3.0
             )
 
-            # TODO 5: Nếu response.status trong khoảng 200-299:
             if 200 <= response.status < 300:
                 return True
 
-            # TODO 6: Nếu status không thành công:
             logger.warning(
                 "Slack webhook attempt %s failed with status %s",
                 attempt + 1,
@@ -107,19 +115,15 @@ def _send_with_retry(payload: dict, max_retries: int = 3) -> bool:
             )
 
         except Exception as exc:
-            # TODO 7: logger.warning(...) với attempt và exc
             logger.warning(
                 "Slack webhook attempt %s failed with exception: %s",
                 attempt + 1,
                 exc,
             )
 
-        # TODO 8: Nếu chưa phải lần retry cuối:
         if attempt < max_retries - 1:
             time.sleep(2 ** attempt)
 
-    # TODO 9: logger.error(...) sau khi hết retries
     logger.error("Failed to send Slack alert after %s attempts", max_retries)
     
-    # TODO 10: return False
     return False
