@@ -338,7 +338,7 @@ def test_double_click_approve_chi_dispatch_1_lan(mock_env, mock_dynamodb):
         mock_dispatch.assert_not_called()
 
 
-def test_invalid_dry_run_mode(mock_env, mock_dynamodb, monkeypatch):
+def test_dispatch_uses_fail_safe_dry_run_when_env_invalid(mock_env, mock_dynamodb, monkeypatch):
     monkeypatch.setenv("DRY_RUN_MODE", "invalid_value")
     
     # Phải setup sys.path cho test này nếu module chưa được load

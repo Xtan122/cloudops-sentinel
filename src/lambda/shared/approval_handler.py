@@ -93,9 +93,8 @@ def _record_remediation_result(request_id: str, success: bool, result: dict | No
 def dispatch_remediation(request_id: str, action_type: str, action_parameters: dict):
     """Gọi remediation function tương ứng với action_type đã lưu trong approval record."""
     logger.info("Dispatching remediation for request_id=%s, action_type=%s", request_id, action_type)
-    # REQ-8.5: Fail-safe. Invalid config phải nghiêng về dry-run True
-    dry_run_env = os.environ.get("DRY_RUN_MODE", "true").strip().lower()
-    dry_run = dry_run_env not in ("false", "0", "no")
+    from shared.dry_run import get_dry_run_mode
+    dry_run = get_dry_run_mode()
 
     try:
         if action_type == "stop_ec2":

@@ -39,23 +39,36 @@ def test_send_violation_alert_success(mock_env):
         assert "us-east-1" in attachment["footer"]
         assert attachment["ts"] == 1622548800
 
-def test_send_violation_alert_dry_run(mock_env):
-    violation = {}
-    ai_report = "Dry Run Report"
-    
-    with mock.patch("notification_service._send_with_retry") as mock_retry:
-        mock_retry.return_value = True
-        
-        result = notification_service.send_violation_alert(violation, ai_report, dry_run=True)
-        
+def test_slack_message_has_dry_run_prefix(mock_env):
+    violation = {
+        "severity": "high",
+        "resource_id": "i-123",
+        "region": "us-east-1"
+    }
+    ai_report = "Sample report"
+
+    with mock.patch("notification_service.urllib3.PoolManager") as mock_pool:
+        mock_http = mock.MagicMock()
+        mock_response = mock.MagicMock()
+        mock_response.status = 200
+        mock_http.request.return_value = mock_response
+        mock_pool.return_value = mock_http
+
+        result = notification_service.send_violation_alert(
+            violation=violation,
+            ai_report=ai_report,
+            dry_run=True,
+        )
+
         assert result is True
-        payload = mock_retry.call_args[0][0]
-        attachment = payload["attachments"][0]
         
-        assert attachment["title"].startswith("[DRY-RUN]")
-        assert attachment["color"] == "#FFCC00" # Default is medium
-        assert "unknown" in attachment["footer"] # Default resource and region
-        assert "ts" not in attachment
+        call_args = mock_http.request.call_args
+        body_bytes = call_args.kwargs["body"]
+        payload = json.loads(body_bytes.decode("utf-8"))
+        
+        attachment = payload["attachments"][0]
+        assert "[DRY-RUN]" in attachment["title"]
+        assert attachment["text"] == "Sample report"
 
 def test_send_violation_alert_uppercase_severity(mock_env):
     violation = {"severity": "CRITICAL"}

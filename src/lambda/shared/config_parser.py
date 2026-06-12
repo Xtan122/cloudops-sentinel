@@ -4,6 +4,8 @@ import os
 import copy
 from jsonschema import ValidationError, validate
 
+from shared.dry_run import get_dry_run_mode
+
 logger = logging.getLogger(__name__)
 
 COST_GUARDRAIL_SCHEMA = {
@@ -136,18 +138,7 @@ MINIMAL_SAFE_CONFIG = {
     }
 }
 
-def _parse_env_bool(value: str | None) -> bool | None:
-    """Parse boolean từ env var. Trả về None nếu không có giá trị."""
-    if value is None or value.strip() == "":
-        return None
-    
-    normalized = value.strip().lower()
-    if normalized in ("true", "1", "yes"):
-        return True
-    elif normalized in ("false", "0", "no"):
-        return False
-    else:
-        raise ValueError(f"Invalid boolean value: {value}")
+
 
 def load_config(config_path: str) -> dict:
     """Load JSON config, validate schema, áp dụng fail-safe và env override."""
@@ -173,20 +164,9 @@ def load_config(config_path: str) -> dict:
         raw_config["dry_run_mode"] = True
 
     # 4. Xử lý Environment Overrides với cơ chế Fail-Safe tuyệt đối
-    try:
-        raw_env_value = os.environ.get("DRY_RUN_MODE")
-        env_dry_run_mode = _parse_env_bool(raw_env_value)
-        
-        if env_dry_run_mode is not None:
-            raw_config["dry_run_mode"] = env_dry_run_mode
-            logger.info("DRY_RUN_MODE overridden by environment to: %s", env_dry_run_mode)
-            
-    except ValueError as exc:
-        # FAIL-SAFE: Phát hiện cấu hình lỗi từ ENV -> Ép thẳng về True để bảo vệ tài nguyên
-        raw_config["dry_run_mode"] = True
-        logger.critical(
-            "CRITICAL: Invalid DRY_RUN_MODE env var: %s. "
-            "Forcing dry_run_mode=True to prevent accidental remediations!", exc
-        )
+    file_default = raw_config.get("dry_run_mode", True)
+    final_dry_run = get_dry_run_mode(default=file_default)
+    raw_config["dry_run_mode"] = final_dry_run
+    logger.info("DRY_RUN_MODE resolved to: %s (file_default=%s)", final_dry_run, file_default)
 
     return raw_config
