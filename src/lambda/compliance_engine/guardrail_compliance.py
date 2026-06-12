@@ -2,9 +2,9 @@ import logging
 
 import boto3
 
-logger = logging.getLogger(__name__)
+from shared.exclusion_checker import EXCLUSION_TAG_KEY, has_exclusion_tag
 
-EXCLUSION_TAG_KEY = "skip-enforcement"
+logger = logging.getLogger(__name__)
 
 
 def check_ebs_encryption(volume_id: str, region: str, config: dict) -> dict | None:
@@ -40,7 +40,7 @@ def check_ebs_encryption(volume_id: str, region: str, config: dict) -> dict | No
     volume = volumes[0]
 
     tags = volume.get("Tags", [])
-    if _has_exclusion_tag(tags):
+    if has_exclusion_tag(tags):
         logger.info(
             "%s",
             {
@@ -74,20 +74,6 @@ def check_ebs_encryption(volume_id: str, region: str, config: dict) -> dict | No
         )
 
 
-def _has_exclusion_tag(tags: list[dict]) -> bool:
-    # TODO: So khop Key va Value case-insensitive
-    # Key == "skip-enforcement", Value == "true"
-    for tag in tags:
-        key = tag.get("Key", "")
-        value = tag.get("Value", "")
-
-        normalized_key = str(key).strip().lower()
-        normalized_value = str(value).strip().lower()
-
-        if normalized_key == EXCLUSION_TAG_KEY.lower() and normalized_value == "true":
-            return True
-
-    return False
 
 
 def _create_violation(volume_id: str, region: str, severity: str = "high") -> dict:

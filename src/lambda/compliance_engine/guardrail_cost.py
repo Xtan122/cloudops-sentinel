@@ -2,10 +2,11 @@ import logging
 
 import boto3
 
+from shared.exclusion_checker import EXCLUSION_TAG_KEY, has_exclusion_tag
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_REQUIRED_TAGS = ["Owner", "Project"]
-EXCLUSION_TAG_KEY = "skip-enforcement"
 
 
 def check_ec2_tagging(instance_id: str, region: str, config: dict) -> dict | None:
@@ -45,7 +46,7 @@ def check_ec2_tagging(instance_id: str, region: str, config: dict) -> dict | Non
     tags: list[dict] = instances[0].get("Tags", [])
 
     # REQ-9 + REQ-12: skip voi structured log
-    if _has_exclusion_tag(tags):
+    if has_exclusion_tag(tags):
         logger.info(
             "%s",
             {
@@ -72,18 +73,6 @@ def check_ec2_tagging(instance_id: str, region: str, config: dict) -> dict | Non
     )
 
 
-def _has_exclusion_tag(tags: list) -> bool:
-    for tag in tags:
-        key = tag.get("Key", "")
-        value = tag.get("Value", "")
-
-        normalized_key = key.lower()
-        normalized_value = value.lower()
-
-        if normalized_key == EXCLUSION_TAG_KEY and normalized_value == "true":
-            return True
-
-    return False
 
 
 def _create_violation(

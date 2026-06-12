@@ -4,10 +4,9 @@ import logging
 import boto3
 import botocore.exceptions
 
+from shared.exclusion_checker import EXCLUSION_TAG_KEY, has_exclusion_tag
+
 logger = logging.getLogger(__name__)
-
-EXCLUSION_TAG_KEY = "skip-enforcement"
-
 
 def check_s3_public_access(bucket_name: str, region: str, config: dict) -> dict | None:
     """Kiem tra S3 bucket co public read/write policy theo REQ-3 va REQ-9."""
@@ -27,14 +26,15 @@ def check_s3_public_access(bucket_name: str, region: str, config: dict) -> dict 
             logger.error(f"Error getting tags for bucket {bucket_name}: {e}")
             raise
 
-    if _has_exclusion_tag(tags):
+    if has_exclusion_tag(tags):
         logger.info(
             json.dumps(
                 {
                     "event": "COMPLIANCE_SKIPPED",
-                    "reason": "excluded via tags",
+                    "reason": "exclusion_tag_present",
                     "resource_id": bucket_name,
                     "region": region,
+                    "tag": EXCLUSION_TAG_KEY,
                 }
             )
         )
@@ -133,13 +133,6 @@ def is_policy_public(policy_json: str) -> tuple[bool, str]:
     return False, "none"
 
 
-def _has_exclusion_tag(tags: list[dict]) -> bool:
-    for tag in tags:
-        key = tag.get("Key", "")
-        value = tag.get("Value", "")
-        if key.lower() == EXCLUSION_TAG_KEY.lower() and value.lower() == "true":
-            return True
-    return False
 
 
 def _create_violation(
