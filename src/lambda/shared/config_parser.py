@@ -128,7 +128,7 @@ MINIMAL_SAFE_CONFIG = {
         "compliance": {"enabled": False, "violation_severity": "high"}
     },
     "slack": {
-        "webhook_url_env": "SLACK_WEBHOOK_URL",
+        "webhook_url_env": "SLACK_WEBHOOK_SSM_PARAM",
         "channel": "#cloud-alerts",
         "timezone": "UTC"
     },

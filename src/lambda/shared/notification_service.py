@@ -4,9 +4,36 @@ import os
 import time
 from datetime import datetime
 
+import boto3
 import urllib3
 
 logger = logging.getLogger(__name__)
+
+_cached_webhook_url = None
+
+def _get_webhook_url() -> str:
+    global _cached_webhook_url
+    if _cached_webhook_url:
+        return _cached_webhook_url
+
+    webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
+    if webhook_url:
+        _cached_webhook_url = webhook_url
+        return webhook_url
+
+    ssm_param_name = os.environ.get("SLACK_WEBHOOK_SSM_PARAM")
+    if not ssm_param_name:
+        logger.error("Missing SLACK_WEBHOOK_SSM_PARAM environment variable")
+        return ""
+
+    try:
+        ssm = boto3.client("ssm")
+        response = ssm.get_parameter(Name=ssm_param_name, WithDecryption=True)
+        _cached_webhook_url = response["Parameter"]["Value"]
+        return _cached_webhook_url
+    except Exception as exc:
+        logger.error("Failed to fetch Slack webhook from SSM: %s", exc)
+        return ""
 
 SEVERITY_COLORS = {
     "critical": "#FF0000",
@@ -87,10 +114,9 @@ def _send_with_retry(payload: dict, max_retries: int = 3) -> bool:
     - REQ-11.4: retry tối đa 3 lần với exponential backoff
     - REQ-11.5: nếu thất bại hết thì log error và tiếp tục
     """
-    webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
+    webhook_url = _get_webhook_url()
 
     if not webhook_url:
-        logger.error("Missing SLACK_WEBHOOK_URL environment variable")
         return False
 
     http = urllib3.PoolManager()
