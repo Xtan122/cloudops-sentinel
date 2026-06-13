@@ -1,21 +1,36 @@
 .venv
 .agent
 .codex
-.git
 .pytest_cache
 
+# Python
 .coverage
-_pycache__
+__pycache__/
 *.pyc
+*.pyo
+*.pyd
+.env
 
+# Logs
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Project specific docs
 study_guide_phase0_3.md
 study_guide_phase4_7.md
 checklist.md
 history.md
 motaduan.md
-requirements.txt
 requirements.md
 docs/diagrams
 AI_INSTRUCTIONS.md
 
-.gitignore
+# Terraform
+.terraform
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
