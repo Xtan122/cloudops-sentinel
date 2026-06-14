@@ -54,3 +54,13 @@ variable "reserved_concurrency" {
     error_message = "reserved_concurrency must be a positive integer."
   }
 }
+
+variable "cloudwatch_log_group_arn" {
+  description = "ARN of the CloudWatch log group for Lambda"
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.cloudwatch_log_group_arn)) > 0
+    error_message = "The cloudwatch_log_group_arn must not be empty or contain only whitespace."
+  }
+}

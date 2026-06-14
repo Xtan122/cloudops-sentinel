@@ -78,12 +78,11 @@ resource "aws_iam_role_policy" "lambda_permissions" {
         Effect = "Allow"
 
         Action = [
-          "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
 
-        Resource = "*"
+        Resource = var.cloudwatch_log_group_arn
       },
 
       {
