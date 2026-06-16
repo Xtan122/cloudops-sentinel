@@ -34,3 +34,5 @@ AI_INSTRUCTIONS.md
 .terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
+*.tfbackend
+backend-*.hcl
