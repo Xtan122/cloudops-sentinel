@@ -1,7 +1,37 @@
 # CloudOps Sentinel
 
-Automated cloud governance on AWS with Lambda, EventBridge, CloudTrail,
-Terraform, Slack alerts, human approval, and safe remediation controls.
+CloudOps Sentinel is an event-driven AWS cloud governance project that detects
+selected compliance and cost-control violations, sends Slack alerts, and applies
+controlled remediation through dry-run or human-approved enforcement workflows.
+The platform is provisioned with Terraform and validated through a GitHub
+Actions CI/CD pipeline.
+
+This repository is designed as a dev/learning implementation of enterprise
+cloud operations patterns: infrastructure as code, remote state, automated
+tests, policy scanning, least-privilege-oriented IAM, centralized event capture,
+audit logs, dead-letter queues, secret isolation, and approval gates before
+high-impact remediation.
+
+## Project Scope
+
+CloudOps Sentinel focuses on four practical AWS guardrails that are easy to
+verify in a dev account:
+
+- Detect common risky or non-compliant AWS changes from EventBridge and
+  CloudTrail.
+- Send structured Slack notifications with resource, region, severity, and
+  remediation context.
+- Support dry-run mode for safe validation without changing resources.
+- Support enforcement mode for selected remediation actions, including Slack
+  approval for high/critical changes.
+- Keep secrets out of source code by reading the Slack webhook from SSM
+  Parameter Store.
+- Deploy reproducibly through Terraform and GitHub Actions.
+
+This is not a full production CSPM platform. Production hardening would require
+additional controls such as Slack request signature verification, production
+environment separation, stronger API Gateway access logging, broader guardrail
+coverage, and an explicit operations runbook.
 
 ## What It Does
 
@@ -21,30 +51,55 @@ for high/critical actions before executing remediation.
 
 ## Architecture
 
+![CloudOps Sentinel architecture](docs/architect-image/cloudops_sentinel_architecture.png)
+
+The PNG diagram above is the primary architecture view for quick scanning. The
+Mermaid diagram below keeps the same flow in a text-editable format for review
+and future updates.
+
 ```mermaid
 flowchart LR
-    EC2["EC2 running"] --> EBApp["EventBridge app region\nap-southeast-1"]
-    S3["S3 PutBucketPolicy"] --> CT["CloudTrail\nmulti-region management events"]
+    GH["GitHub Actions CI/CD\npytest + Checkov + deploy-dev"] --> TF["Terraform apply\n(dev environment)"]
+    TF --> Infra["AWS infrastructure\nLambda, EventBridge, CloudTrail,\nAPI Gateway, DynamoDB, SQS, KMS, SSM"]
+
+    EC2["EC2 running"] --> EBApp["EventBridge\napp region ap-southeast-1"]
+    S3["S3 PutBucketPolicy"] --> CT["CloudTrail\nmulti-region write management events"]
     EBS["EBS CreateVolume"] --> CT
     IAM["IAM CreateAccessKey\nglobal service"] --> CT
+    CT --> S3Logs["S3 CloudTrail log bucket\nversioning + lifecycle"]
     CT --> EBApp
-    CT --> EBUS["EventBridge us-east-1\nIAM global rule"]
+    CT --> EBUS["EventBridge us-east-1\nIAM global forwarding rule"]
     EBUS -->|"PutEvents"| EBApp
 
     EBApp --> EP["Lambda event processor"]
-    EP --> CE["Compliance engine"]
-    CE --> AI["Bedrock reporter\nfallback template"]
-    AI --> Slack["Slack alert"]
-    CE -->|"high / critical"| Approval["Slack approval request"]
-    Approval --> API["API Gateway\n/slack/approval"]
+    EP --> CE["Compliance engine\nEC2, S3, IAM, EBS guardrails"]
+    CE --> AI["Bedrock reporter\nwith template fallback"]
+    EP -->|"GetParameter"| SSM["SSM SecureString\nSlack webhook"]
+    AI --> SlackAlert["Slack violation alert"]
+    SSM -->|"webhook URL"| SlackAlert
+
+    CE -->|"dry-run"| CW["CloudWatch Logs\nstructured audit logs"]
+    CE -->|"medium enforcement"| RE["Remediation engine"]
+    CE -->|"high / critical enforcement"| Approval["Human approval workflow"]
+    Approval -->|"PutItem"| DDB["DynamoDB approval table\nTTL + PITR + KMS"]
+    Approval -->|"Slack buttons"| SlackApproval["Slack approval message"]
+    SSM -->|"webhook URL"| SlackApproval
+    SlackApproval -->|"Approve / Reject"| API["API Gateway HTTP API\nPOST /slack/approval"]
     API --> AH["Lambda approval handler"]
-    AH --> DDB["DynamoDB approval table"]
-    AH --> RE["Remediation engine"]
-    CE -->|"medium"| RE
+    AH -->|"GetItem / UpdateItem"| DDB
+    AH -->|"approved"| RE
     RE --> AWS["AWS resources"]
-    EP --> CW["CloudWatch Logs"]
+
+    EP --> CW
     AH --> CW
+    EP --> XR["AWS X-Ray tracing"]
+    AH --> XR
     EP --> DLQ["SQS DLQ"]
+    AH --> DLQ
+    KMS["KMS CMK\nencryption"] -.-> CW
+    KMS -.-> DLQ
+    KMS -.-> DDB
+    KMS -.-> CT
 ```
 
 Important implementation detail: IAM is a global service. `CreateAccessKey`
@@ -65,6 +120,60 @@ Enforcement mode:
 | EC2 | S3 | IAM | EBS |
 |---|---|---|---|
 | ![EC2 dry-run false](docs/screenshots/dry-run-false/ec2_missing_required_tags.png) | ![S3 dry-run false](docs/screenshots/dry-run-false/s3_public_s3_access.png) | ![IAM dry-run false](docs/screenshots/dry-run-false/iam_access_key_created.png) | ![EBS dry-run false](docs/screenshots/dry-run-false/ebs_unencrypted_volume.png) |
+
+CI/CD result:
+
+![GitHub Actions CI/CD success](docs/screenshots/ci-cd/success.png)
+
+The successful GitHub Actions run shows:
+
+- `test`: unit tests and coverage gate passed.
+- `security-scan`: Checkov Terraform scan passed.
+- `deploy-dev`: Terraform deployment to the dev environment completed.
+- `deploy-production`: skipped intentionally because production deployment is
+  disabled in this repository.
+- `notify-failure`: skipped because the pipeline did not fail.
+
+This means CI/CD is working for the dev environment. It does not mean production
+deployment is enabled.
+
+## CI/CD Pipeline
+
+The pipeline is defined in `.github/workflows/ci-cd.yml`.
+
+| Trigger | Jobs | Result |
+|---|---|---|
+| Pull request to `main` | `test`, `security-scan` | CI validation only |
+| Push to `develop` | `test`, `security-scan`, `deploy-dev` | CI + dev CD |
+| Push to `main` | `test`, `security-scan` | Production deploy is currently disabled |
+
+Pipeline stages:
+
+1. `test` installs Python dependencies and runs `pytest` with coverage and a
+   timeout.
+2. `security-scan` runs Checkov against Terraform code.
+3. `deploy-dev` assumes an AWS role through GitHub OIDC, writes the Slack
+   webhook into SSM Parameter Store, builds the Lambda zip, and runs Terraform
+   `init`, `fmt`, `validate`, `plan`, and `apply` for the dev environment.
+4. `notify-failure` posts to Slack only when a required pipeline job fails.
+
+Required GitHub configuration:
+
+| Type | Name | Purpose |
+|---|---|---|
+| Secret | `DEV_AWS_ROLE_ARN` | AWS IAM role assumed by GitHub Actions through OIDC |
+| Secret | `SLACK_WEBHOOK_URL` | Slack incoming webhook written to SSM SecureString during deploy |
+| Variable | `AWS_REGION` | AWS region, for example `ap-southeast-1` |
+
+The Terraform remote state bucket must already exist before the `deploy-dev`
+job runs:
+
+```text
+cloudops-sentinel-tfstate-<account-id>-dev
+```
+
+The workflow creates `backend-dev.hcl` and `dev.tfvars` dynamically during the
+run, so those local environment files should not be committed.
 
 ## Prerequisites
 
@@ -314,8 +423,8 @@ checkov -d terraform --framework terraform
 
 Latest validated result during final testing:
 
-- Unit tests: `169 passed`
-- Coverage: `92%`
+- Unit tests: `172 passed`
+- Coverage: `96.36%`
 - Checkov: `0 failed` with documented skips
 - Manual AWS screenshots: 8 total, covering dry-run on/off for EC2, S3, IAM,
   and EBS.
