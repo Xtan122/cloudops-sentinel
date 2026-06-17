@@ -42,16 +42,19 @@ variable "timeout_seconds" {
 }
 
 variable "reserved_concurrency" {
-  description = "Reserved concurrency for the Lambda function"
+  description = "Reserved concurrency for the Lambda function. Null disables reserved concurrency."
   type        = number
-  default     = 10
+  default     = null
 
   validation {
     condition = (
-      var.reserved_concurrency > 0
-      && var.reserved_concurrency == floor(var.reserved_concurrency)
+      var.reserved_concurrency == null ||
+      (
+        var.reserved_concurrency > 0
+        && var.reserved_concurrency == floor(var.reserved_concurrency)
+      )
     )
-    error_message = "reserved_concurrency must be a positive integer."
+    error_message = "reserved_concurrency must be null or a positive integer."
   }
 }
 

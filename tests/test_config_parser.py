@@ -53,3 +53,28 @@ def test_config_file_true_but_env_false_overrides_to_false(monkeypatch, tmp_path
     
     config = load_config(str(config_file))
     assert config["dry_run_mode"] is False
+
+def test_invalid_json_returns_minimal_safe_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("DRY_RUN_MODE", raising=False)
+    config_file = tmp_path / "config.json"
+    config_file.write_text("{ invalid json")
+
+    config = load_config(str(config_file))
+
+    assert config == MINIMAL_SAFE_CONFIG
+    assert config["dry_run_mode"] is True
+
+def test_invalid_schema_returns_minimal_safe_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("DRY_RUN_MODE", raising=False)
+
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({
+        "version": "1.0",
+        "dry_run_mode": "false",
+        "guardrails": {}
+    }))
+
+    config = load_config(str(config_file))
+
+    assert config == MINIMAL_SAFE_CONFIG
+    assert config["dry_run_mode"] is True

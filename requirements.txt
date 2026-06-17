@@ -1,5 +1,7 @@
 boto3
 pytest
+pytest-cov
+pytest-timeout
 moto
 jsonschema
 checkov

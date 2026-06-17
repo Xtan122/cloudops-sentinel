@@ -1,7 +1,22 @@
 import json
 import logging
 from datetime import datetime, timezone
+import os
 
+from shared.config_parser import load_config
+from shared.ai_reporter import generate_report
+from shared.notification_service import send_violation_alert
+from shared.human_approval import send_approval_request
+
+from compliance_engine.guardrail_cost import check_ec2_tagging
+from compliance_engine.guardrail_security import check_s3_public_access
+from compliance_engine.guardrail_iam import check_iam_access_key
+from compliance_engine.guardrail_compliance import check_ebs_encryption
+
+from remediation_engine.remediation_ec2 import stop_non_compliant_ec2
+from remediation_engine.remediation_s3 import revert_s3_bucket_to_private
+from remediation_engine.remediation_iam import deactivate_access_key
+from remediation_engine.remediation_ebs import tag_non_compliant_ebs
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -69,6 +84,11 @@ def log_structured(level: str, event_type: str, data: dict) -> None:
 
 def route_to_compliance(metadata: dict, raw_event: dict) -> str:
     """Route event den dung compliance checker dua tren resource_type."""
+    # Load config
+    config_path = os.environ.get("CONFIG_PATH", "config.json")
+    config = load_config(config_path)
+    dry_run = config.get("dry_run_mode", True)
+
     resource_type = metadata.get("resource_type")
 
     if resource_type is None:
@@ -85,24 +105,83 @@ def route_to_compliance(metadata: dict, raw_event: dict) -> str:
         return "SKIPPED"
 
     resource_id = metadata.get("resource_id")
+    region = metadata.get("region")
     if resource_id is None:
         raise ValueError(f"Event matches {resource_type} pattern but missing resource_id. Cannot route to compliance checker.")
 
+    violation = None
+    action_type = None
+    action_parameters = {}
+    remediation_func = None
+    remediation_action = None
     if resource_type == "ec2":
-        # TODO 2: chuan bi goi cost guardrail checker
-        pass
+        violation = check_ec2_tagging(resource_id, region, config)
+        action_type = "stop_ec2"
+        action_parameters = {"instance_id": resource_id, "region": region}
+        remediation_action = "Stop non-compliant EC2 instance"
+        remediation_func = lambda: stop_non_compliant_ec2(resource_id, region, dry_run)
     elif resource_type == "s3":
-        # TODO 3: chuan bi goi security guardrail checker
-        pass
+        violation = check_s3_public_access(resource_id, region, config)
+        action_type = "revert_s3_to_private"
+        action_parameters = {"bucket_name": resource_id, "region": region}
+        remediation_action = "Revert public S3 bucket to private"
+        remediation_func = lambda: revert_s3_bucket_to_private(resource_id, region, dry_run)
     elif resource_type == "iam":
-        # TODO 4: chuan bi goi iam guardrail checker
-        pass
+        event_detail = raw_event.get("detail", {})
+        violation = check_iam_access_key(event_detail, config)
+        username = event_detail.get("responseElements", {}).get("accessKey", {}).get("userName")
+        action_type = "deactivate_iam_key"
+        action_parameters = {"username": username, "access_key_id": resource_id}
+        remediation_action = f"Deactivate IAM access key for user {username}"
+        remediation_func = lambda: deactivate_access_key(username, resource_id, dry_run)
     elif resource_type == "ebs":
-        # TODO 5: chuan bi goi compliance guardrail checker
-        pass
+        violation = check_ebs_encryption(resource_id, region, config)
+        action_type = "tag_ebs_noncompliant"
+        action_parameters = {"volume_id": resource_id, "region": region}
+        remediation_action = "Tag unencrypted EBS volume as non-compliant"
+        remediation_func = lambda: tag_non_compliant_ebs(resource_id, region, dry_run)
     else:
-        # TODO 6: roi vao nhanh khong mong doi
         raise ValueError(f"Unknown resource_type for routing: {resource_type}")
+
+    if not violation:
+        log_structured("INFO", "COMPLIANT_RESOURCE", {
+            "message": f"Resource {resource_id} is compliant.",
+            "resource_type": resource_type,
+            "resource_id": resource_id
+        })
+        return "COMPLIANT"
+
+    # Handle violation
+    log_structured("WARNING", "VIOLATION_DETECTED", violation)
+    # Generate AI/template report
+    ai_report = generate_report(violation)
+    # Send Slack alert
+    send_violation_alert(violation, ai_report, dry_run)
+
+    if dry_run:
+        log_structured("INFO", "REMEDIATION_SKIPPED_DRY_RUN", {
+            "message": "Dry-run mode is enabled. Skipping remediation.",
+            "resource_id": resource_id,
+            "resource_type": resource_type
+        })
+        return "DRY_RUN"
+
+    # Enforcement: check for human approval if high-risk action
+    severity = violation.get("severity", "medium").lower()
+    if severity in ["high", "critical"]:
+        log_structured("INFO", "APPROVAL_REQUESTED", {
+            "message": f"High risk action required for {resource_id}. Requesting human approval.",
+            "action_type": action_type
+        })
+        send_approval_request(violation, remediation_action, action_type, action_parameters)
+        return "PENDING_APPROVAL"
+    else:
+        log_structured("INFO", "EXECUTING_REMEDIATION", {
+            "message": f"Executing automated remediation for {resource_id}.",
+            "action_type": action_type
+        })
+        remediation_func()
+        return "REMEDIATED"
 
     return "ROUTED"
 

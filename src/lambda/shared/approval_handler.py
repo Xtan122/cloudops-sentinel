@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import logging
 import os
@@ -41,6 +43,24 @@ def parse_slack_payload(raw_body: str) -> dict:
     except json.JSONDecodeError as e:
         logger.error("Failed to decode JSON payload: %s", e)
         raise ValueError("Invalid JSON in payload") from e
+
+
+def _extract_request_body(event: dict) -> str:
+    """Extract API Gateway body, decoding base64 form posts when needed."""
+    raw_body = event.get("body", "")
+
+    if not event.get("isBase64Encoded"):
+        return raw_body
+
+    if not isinstance(raw_body, str) or not raw_body.strip():
+        return ""
+
+    try:
+        return base64.b64decode(raw_body).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError) as exc:
+        logger.error("Failed to decode base64 Slack callback body: %s", exc)
+        raise ValueError("Invalid base64-encoded callback body") from exc
+
 
 def _parse_expires_at_epoch(record: dict) -> int | None:
     """Parse expires_at_epoch from DynamoDB record."""
@@ -148,8 +168,8 @@ def dispatch_remediation(request_id: str, action_type: str, action_parameters: d
 
 def lambda_handler(event, context):
     """Xử lý Slack interactive callback cho approval workflow."""
-    raw_body = event.get("body", "")
     try:
+        raw_body = _extract_request_body(event)
         payload = parse_slack_payload(raw_body)
     except (ValueError, KeyError) as e:
         logger.error("Invalid payload format: %s", e)

@@ -1,3 +1,4 @@
+import base64
 import json
 import sys
 from pathlib import Path
@@ -45,6 +46,12 @@ def build_slack_event(action_id, value, payload_dict=None, raw_body=None):
     from urllib.parse import urlencode
     body = urlencode({"payload": json.dumps(payload_dict)})
     return {"body": body}
+
+
+def build_base64_slack_event(action_id, value):
+    event = build_slack_event(action_id, value)
+    encoded_body = base64.b64encode(event["body"].encode("utf-8")).decode("ascii")
+    return {"body": encoded_body, "isBase64Encoded": True}
 
 
 def test_missing_payload(mock_env):
@@ -211,6 +218,37 @@ def test_approve_happy_path(mock_env, mock_dynamodb):
         assert audit_kwargs["ExpressionAttributeValues"][":status"] == "SUCCEEDED"
 
 
+def test_approve_happy_path_with_base64_body(mock_env, mock_dynamodb):
+    event = build_base64_slack_event("approve_action", "req-123")
+
+    mock_dynamodb.get_item.return_value = {
+        "Item": {
+            "request_id": "req-123",
+            "status": "PENDING",
+            "expires_at_epoch": 9999999999,
+            "action_type": "revert_s3_to_private",
+            "action_parameters": {
+                "bucket_name": "bucket-123",
+                "region": "ap-southeast-1",
+            },
+        }
+    }
+
+    with mock.patch(
+        "approval_handler.dispatch_remediation",
+        return_value=(True, {"executed": True}, None),
+    ) as mock_dispatch:
+        res = approval_handler.lambda_handler(event, None)
+
+        assert res["statusCode"] == 200
+        assert "Remediation approved" in res["body"]
+        mock_dispatch.assert_called_once_with(
+            "req-123",
+            "revert_s3_to_private",
+            {"bucket_name": "bucket-123", "region": "ap-southeast-1"},
+        )
+
+
 def test_remediation_failure(mock_env, mock_dynamodb):
     event = build_slack_event("approve_action", "req-123")
     
@@ -355,3 +393,16 @@ def test_dispatch_uses_fail_safe_dry_run_when_env_invalid(mock_env, mock_dynamod
         assert success is True
         # Invalid config -> dry_run phải là True
         mock_stop.assert_called_once_with(instance_id="i-123", region="ap-southeast-1", dry_run=True)
+
+def test_dispatch_remediation_unknown_action_returns_failure(monkeypatch):
+    import approval_handler
+    monkeypatch.setenv("DRY_RUN_MODE", "true")
+    success, result, error = approval_handler.dispatch_remediation(
+        request_id="req-unknown",
+        action_type="delete_everything",
+        action_parameters={}
+    )
+
+    assert success is False
+    assert result is None
+    assert "not supported" in error
