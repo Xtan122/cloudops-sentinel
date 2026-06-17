@@ -1,7 +1,19 @@
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
+resource "aws_sqs_queue" "lambda_dlq" {
+  name = "${var.prefix}-lambda-dlq"
+
+  kms_master_key_id                 = var.kms_key_arn
+  kms_data_key_reuse_period_seconds = 300
+
+  message_retention_seconds = 1209600 # 14 days
+}
+
 resource "aws_lambda_function" "event_processor" {
+  # checkov:skip=CKV_AWS_272: Code signing is deferred until artifact signing is introduced in the CI/CD release process.
+  # checkov:skip=CKV_AWS_117: Lambda is intentionally outside VPC because it only calls AWS public control-plane APIs; VPC would add NAT cost/complexity.
+
   filename         = var.lambda_zip_path
   source_code_hash = filebase64sha256(var.lambda_zip_path)
   function_name    = "${var.prefix}-event-processor"
@@ -24,6 +36,12 @@ resource "aws_lambda_function" "event_processor" {
 
   tracing_config {
     mode = "Active"
+  }
+
+  kms_key_arn = var.kms_key_arn
+
+  dead_letter_config {
+    target_arn = aws_sqs_queue.lambda_dlq.arn
   }
 
 }
@@ -66,6 +84,7 @@ resource "aws_iam_role_policy" "xray_tracing" {
 }
 
 resource "aws_iam_role_policy" "lambda_permissions" {
+  # checkov:skip=CKV_AWS_355: DescribeInstances/DescribeVolumes do not support resource-level permissions
   name = "${var.prefix}-lambda-permissions"
   role = aws_iam_role.lambda_execution_role.id
 

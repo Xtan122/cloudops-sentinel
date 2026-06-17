@@ -64,3 +64,8 @@ variable "cloudwatch_log_group_arn" {
     error_message = "The cloudwatch_log_group_arn must not be empty or contain only whitespace."
   }
 }
+
+variable "kms_key_arn" {
+  description = "ARN of the KMS key for encrypting Lambda environment variables and CloudWatch logs"
+  type        = string
+}

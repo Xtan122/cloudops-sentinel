@@ -17,3 +17,8 @@ variable "environment" {
     error_message = "The environment must be dev, staging, or prod."
   }
 }
+
+variable "kms_key_arn" {
+  description = "ARN of the KMS key for encrypting Lambda environment variables and CloudWatch logs"
+  type        = string
+}

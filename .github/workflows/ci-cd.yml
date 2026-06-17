@@ -1,0 +1,160 @@
+name: CloudOps Sentinel CI/CD
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - develop
+      - main
+
+permissions:
+  id-token: write   # Allow Github Actions to request OIDC tokens for assume AWS IAM Role
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: |
+            pytest tests/ \
+            --cov=. \
+            --cov-report=term-missing \
+            --cov-fail-under=80 \
+            --timeout=60
+
+  security-scan:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Checkov
+        run: pip install checkov
+
+      - name: Run Terraform security scan
+        run: checkov -d terraform --framework terraform
+
+  deploy-dev:
+    needs:
+      - test
+      - security-scan
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment: dev
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+            role-to-assume: ${{ secrets.DEV_AWS_ROLE_ARN }}
+            aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform deploy dev
+        working-directory: terraform/environments/dev
+        run: |
+            terraform init -backend-config=backend-dev.hcl
+            terraform fmt -check -recursive
+            terraform validate
+            terraform plan -var-file=dev.tfvars -out=tfplan
+            terraform apply -auto-approve tfplan
+
+      - name: Notify Slack success
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+            curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"Deploy to development environment successful!"}' \
+            $SLACK_WEBHOOK_URL
+
+  deploy-production:
+    needs:
+      - test
+      - security-scan
+    runs-on: ubuntu-latest
+    # TODO: Enable after terraform/environments/prod and production backend/tfvars are created.
+    if: false && github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+            role-to-assume: ${{ secrets.PROD_AWS_ROLE_ARN }}
+            aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform plan production
+        working-directory: terraform/environments/prod
+        run: |
+            terraform init -backend-config=backend-production.hcl
+            terraform fmt -check -recursive
+            terraform validate
+            terraform plan -var-file=production.tfvars -out=tfplan
+
+      - name: Terraform apply production
+        working-directory: terraform/environments/prod
+        run: terraform apply -auto-approve tfplan
+
+      - name: Notify Slack success
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+            curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"Deploy to production environment successful!"}' \
+            $SLACK_WEBHOOK_URL
+
+  notify-failure:
+    needs:
+      - test
+      - security-scan
+      - deploy-dev
+      # TODO: Add deploy-production after production environment is enabled.
+      # - deploy-production
+    if: always() && failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack failure
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+            curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"🚨 CI/CD Pipeline Failed! Please check the GitHub Actions logs."}' \
+            $SLACK_WEBHOOK_URL
