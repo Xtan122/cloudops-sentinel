@@ -329,3 +329,48 @@ class TestLogStructured:
         # datetime.fromisoformat() raise ValueError nếu không hợp lệ
         dt = datetime.fromisoformat(parsed["timestamp"].replace("Z", "+00:00"))
         assert dt is not None
+
+class TestRouteToCompliance:
+    """Kiểm tra logic định tuyến và gọi đúng compliance/remediation trong route_to_compliance."""
+
+    @pytest.fixture
+    def mock_config(self):
+        return {"dry_run_mode": False}
+
+    def test_ec2_violation_triggers_remediation(self, handler_module, mock_config):
+        metadata = {"resource_type": "ec2", "resource_id": "i-12345", "region": "us-east-1", "account_id": "111"}
+        raw_event = {"source": "aws.ec2"}
+        violation = {"violation_type": "missing_tags", "severity": "medium", "resource_id": "i-12345", "resource_type": "ec2"}
+
+        with patch.object(handler_module, "load_config", return_value=mock_config), \
+             patch.object(handler_module, "check_ec2_tagging", return_value=violation) as mock_check, \
+             patch.object(handler_module, "stop_non_compliant_ec2") as mock_stop, \
+             patch.object(handler_module, "generate_report", return_value="Report"), \
+             patch.object(handler_module, "send_violation_alert") as mock_alert, \
+             patch.dict(handler_module.os.environ, {"CONFIG_PATH": "test.json"}, clear=True):
+
+            status = handler_module.route_to_compliance(metadata, raw_event)
+
+            assert status == "REMEDIATED"
+            mock_check.assert_called_once_with("i-12345", "us-east-1", mock_config)
+            mock_stop.assert_called_once_with("i-12345", "us-east-1", False)
+            mock_alert.assert_called_once()
+
+    def test_high_severity_triggers_approval(self, handler_module, mock_config):
+        metadata = {"resource_type": "s3", "resource_id": "my-bucket", "region": "us-east-1", "account_id": "111"}
+        raw_event = {"source": "aws.s3"}
+        violation = {"violation_type": "public_s3_access", "severity": "high", "resource_id": "my-bucket", "resource_type": "s3"}
+
+        with patch.object(handler_module, "load_config", return_value=mock_config), \
+             patch.object(handler_module, "check_s3_public_access", return_value=violation), \
+             patch.object(handler_module, "revert_s3_bucket_to_private") as mock_revert, \
+             patch.object(handler_module, "generate_report", return_value="Report"), \
+             patch.object(handler_module, "send_violation_alert"), \
+             patch.object(handler_module, "send_approval_request") as mock_approval, \
+             patch.dict(handler_module.os.environ, {"CONFIG_PATH": "test.json"}, clear=True):
+
+            status = handler_module.route_to_compliance(metadata, raw_event)
+
+            assert status == "PENDING_APPROVAL"
+            mock_revert.assert_not_called()
+            mock_approval.assert_called_once()

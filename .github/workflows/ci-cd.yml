@@ -82,7 +82,55 @@ jobs:
 
       - name: Terraform deploy dev
         working-directory: terraform/environments/dev
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
+            ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+            STATE_BUCKET="cloudops-sentinel-tfstate-${ACCOUNT_ID}-dev"
+
+            cat > backend-dev.hcl <<EOF
+            bucket       = "${STATE_BUCKET}"
+            key          = "cloudops-sentinel/dev/terraform.tfstate"
+            region       = "${{ vars.AWS_REGION }}"
+            encrypt      = true
+            use_lockfile = true
+            EOF
+
+            cat > dev.tfvars <<EOF
+            prefix                  = "cloudops-sentinel-dev"
+            environment             = "dev"
+            lambda_zip_path         = "../../../build/cloudops-sentinel-lambda-v6.zip"
+            dry_run_mode            = true
+            reserved_concurrency    = null
+            slack_webhook_ssm_param = "/cloudops-sentinel/dev/slack/webhook-url"
+            EOF
+
+            aws ssm put-parameter \
+              --region "${{ vars.AWS_REGION }}" \
+              --name "/cloudops-sentinel/dev/slack/webhook-url" \
+              --type SecureString \
+              --value "$SLACK_WEBHOOK_URL" \
+              --overwrite
+
+            cd ../../..
+            rm -rf build/lambda_package_v6 build/cloudops-sentinel-lambda-v6.zip
+            mkdir -p build/lambda_package_v6
+            python -m pip install \
+              --platform manylinux2014_x86_64 \
+              --implementation cp \
+              --python-version 3.11 \
+              --only-binary=:all: \
+              --target build/lambda_package_v6 \
+              jsonschema urllib3
+            cp src/lambda/event_processor/handler.py build/lambda_package_v6/handler.py
+            cp -R src/lambda/shared build/lambda_package_v6/shared
+            cp -R src/lambda/compliance_engine build/lambda_package_v6/compliance_engine
+            cp -R src/lambda/remediation_engine build/lambda_package_v6/remediation_engine
+            cp -R config build/lambda_package_v6/config
+            cd build/lambda_package_v6
+            zip -r ../cloudops-sentinel-lambda-v6.zip .
+            cd ../../terraform/environments/dev
+
             terraform init -backend-config=backend-dev.hcl
             terraform fmt -check -recursive
             terraform validate

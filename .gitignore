@@ -1,7 +1,9 @@
 .venv
+venv/
 .agent
 .codex
 .pytest_cache
+build/
 
 # Python
 .coverage
@@ -35,4 +37,32 @@ AI_INSTRUCTIONS.md
 *.tfstate
 *.tfstate.backup
 *.tfbackend
+*.tfvars
+*.tfplan
+tfplan
+tf-destroy-plan
 backend-*.hcl
+
+# Lambda build artifacts
+*.zip
+
+# Terraform crash logs
+crash.log
+crash.*.log
+
+# Terraform local overrides
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Python tools and environments
+.mypy_cache/
+htmlcov/
+dist/
+*.egg-info/
+.eggs/
+
+# Editor temp files
+*.swp
+*~

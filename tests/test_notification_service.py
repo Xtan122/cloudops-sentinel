@@ -167,3 +167,26 @@ def test_send_with_retry_eventual_success(mock_sleep, mock_pool_manager, mock_en
     assert result is True
     assert mock_http.request.call_count == 3
     assert mock_sleep.call_count == 2
+
+def test_missing_webhook_and_ssm_param_returns_false(monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_SSM_PARAM", raising=False)
+
+    import notification_service
+    notification_service._cached_webhook_url = None
+
+    violation = {"severity": "high", "resource_id": "i-123"}
+
+    result = notification_service.send_violation_alert(violation, "AI Report", dry_run=False)
+
+    assert result is False
+
+def test_send_slack_payload_returns_false_when_webhook_config_missing(monkeypatch):
+    import notification_service
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_SSM_PARAM", raising=False)
+    notification_service._cached_webhook_url = None
+
+    result = notification_service.send_slack_payload({"text": "hello"})
+
+    assert result is False
